@@ -1,4 +1,5 @@
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager"
+import { backOff } from "exponential-backoff"
 import type { ConnectionOptions } from "tls"
 import type {
   EngineDatabaseProperties,
@@ -91,7 +92,11 @@ export abstract class AbstractEngine {
     const command = new GetSecretValueCommand({
       SecretId: arn,
     })
-    const secret = await secrets_client.send(command)
+    // Retry while IAM permissions on the secret propagate
+    const secret = await backOff(() => secrets_client.send(command), {
+      numOfAttempts: 10,
+      startingDelay: 500,
+    })
     if (secret.SecretString) {
       const json = JSON.parse(secret.SecretString)
       return json.password

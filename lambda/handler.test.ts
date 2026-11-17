@@ -1,4 +1,5 @@
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager"
+import { PutParameterCommand, SSMClient } from "@aws-sdk/client-ssm"
 import { MysqlEngine } from "./engine.mysql"
 import { PostgresqlEngine } from "./engine.postgresql"
 import { handler } from "./handler"
@@ -9,6 +10,9 @@ jest.mock("@aws-sdk/client-secrets-manager")
 const SecretsManagerClientMock = SecretsManagerClient as jest.MockedClass<
   typeof SecretsManagerClient
 >
+
+jest.mock("@aws-sdk/client-ssm")
+const SSMClientMock = SSMClient as jest.MockedClass<typeof SSMClient>
 
 // Mock the database engines
 jest.mock("./engine.mysql")
@@ -268,5 +272,36 @@ describe("Handler CloudFormation Property Conversion", () => {
       await expect(handler(request)).rejects.toThrow("non-negative integer")
       expect(mockMysqlEngine.createRole).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe("Handler parameter password", () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
+  it("should retry reading the password secret while IAM permissions propagate", async () => {
+    const accessDenied = Object.assign(new Error("not authorized to GetSecretValue"), {
+      name: "AccessDeniedException",
+    })
+    SecretsManagerClientMock.prototype.send
+      .mockResolvedValueOnce({
+        SecretString: JSON.stringify({ username: "root", password: "master", engine: "mysql" }),
+      } as never)
+      .mockRejectedValueOnce(accessDenied as never)
+      .mockResolvedValueOnce({ SecretString: JSON.stringify({ password: "pwd" }) } as never)
+
+    await handler(
+      createRequest("parameter_password", "", {
+        PasswordArn: "arn:aws:secretsmanager:us-east-1:123456789:secret:role",
+        ParameterName: "/test/password",
+      })
+    )
+
+    expect(SecretsManagerClientMock.prototype.send).toHaveBeenCalledTimes(3)
+    expect(SSMClientMock.prototype.send).toHaveBeenCalledTimes(2)
+    expect(PutParameterCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ Name: "/test/password", Value: "pwd" })
+    )
   })
 })

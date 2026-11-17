@@ -364,8 +364,14 @@ async function handleParameterPassword(props: any): Promise<void> {
   const secretArn = props.PasswordArn
   const parameterName = props.ParameterName
 
-  // Get the secret
-  const secretData = await secrets_client.send(new GetSecretValueCommand({ SecretId: secretArn }))
+  // Get the secret – retry while IAM perms propagate
+  const secretData = await backOff(
+    () => secrets_client.send(new GetSecretValueCommand({ SecretId: secretArn })),
+    {
+      numOfAttempts: 10,
+      startingDelay: 500,
+    }
+  )
 
   if (!secretData.SecretString) throw "No secret string for parameter"
   const secretObj = JSON.parse(secretData.SecretString)
